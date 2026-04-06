@@ -164,16 +164,11 @@ def generate_summary(repos):
         payload = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "你是一名资深技术专家，必须只返回 JSON 格式结果，不包含任何 Markdown。"},
+                {"role": "system", "content": "你是一名资深技术专家，必须只返回 JSON 格式结果，不要包含 Markdown 代码块。"},
                 {"role": "user", "content": prompt},
             ],
-            "response_format": {"type": "json_object"},
             "temperature": 0.4
         }
-        
-        # Deepseek chat requires {"type": "json_object"} output to be a JSON object, so we modify the prompt to output an object if we use json_object.
-        # But to be perfectly safe, let's keep it as an array and forgo `json_object` format, instead just removing it from payload.
-        del payload["response_format"]
         
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -182,62 +177,77 @@ def generate_summary(repos):
         response = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=120)
         response.raise_for_status()
         
-        raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        raw_content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         
-        # 清除 markdown 外壳
-        if raw.startswith("```"):
-            lines = raw.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
+        # 1. Cleaner JSON Extraction: Remove potential markdown wrappers
+        if raw_content.startswith("```"):
+            raw_content = re.sub(r'^```(json)?\n', '', raw_content)
+            raw_content = re.sub(r'\n```$', '', raw_content)
             
-        # 尝试查找包含 json 的括号结构
-        json_match = re.search(r'(\[.*\]|\{.*\})', raw, re.DOTALL)
+        json_match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
         if json_match:
-            raw = json_match.group(1)
+            raw_content = json_match.group(1)
             
-        summaries = json.loads(raw)
+        summaries_data = json.loads(raw_content)
         
-        # 处理返回是字典的情况，例如 {"projects": [...]}，或者 {...} 
-        if isinstance(summaries, dict):
-            # 找到内部包含列表的值
-            for k, v in summaries.items():
+        # 2. Structural Normalization: Convert all variants to a standard list of objects
+        normalized_list = []
+        if isinstance(summaries_data, dict):
+            # Case A: {"projects": [...]}
+            for k, v in summaries_data.items():
                 if isinstance(v, list):
-                    summaries = v
+                    normalized_list = v
                     break
             else:
-                # 如果找不到列表，可能是一个包含 rank key 的字典： { "1": {"name":...}, ... }
-                summaries = list(summaries.values())
+                # Case B: {"1": "summary text"} or {"1": {"summary": "..."}}
+                for k, v in summaries_data.items():
+                    if isinstance(v, str):
+                        normalized_list.append({"rank": k, "summary": v})
+                    elif isinstance(v, dict):
+                        if "rank" not in v: v["rank"] = k
+                        normalized_list.append(v)
+        elif isinstance(summaries_data, list):
+            # Case C: ["summary1", "summary2"] (positional strings)
+            for i, item in enumerate(summaries_data):
+                if isinstance(item, str):
+                    normalized_list.append({"rank": i+1, "summary": item})
+                else:
+                    normalized_list.append(item)
 
-        # 尝试构建结果
+        # 3. Final Mapping Logic: Map by Rank (priority) then Name (fuzzy) then Position (fallback)
         result = {}
-        for item in summaries:
-            if not isinstance(item, dict):
-                continue
-            summary_text = item.get("summary") or item.get("description", "暂无解读。")
+        for item in normalized_list:
+            if not isinstance(item, dict): continue
+            
+            val = item.get("summary") or item.get("description") or "暂无解读。"
+            
+            # Use Rank if available
             if "rank" in item:
                 try:
-                    result[int(item["rank"])] = summary_text
+                    result[int(item["rank"])] = val
                 except (ValueError, TypeError):
                     pass
-            else:
-                # 通过纯 name 模糊匹配
+            
+            # Fuzzy match by name if repo index still missing
+            item_name = item.get("name", "").lower()
+            if item_name:
                 for i, r in enumerate(repos, 1):
-                    item_name = item.get("name", "").lower()
-                    repo_name = r["name"].lower()
-                    if item_name and (item_name in repo_name or repo_name in item_name):
-                        result[i] = summary_text
+                    if i not in result:
+                        repo_name = r["name"].lower()
+                        if item_name in repo_name or repo_name in item_name:
+                            result[i] = val
 
-        # 如果部分没匹配上，基于位置顺序保底匹配（如果数量刚好）
-        if len(result) < len(repos) and len(summaries) == len(repos):
+        # 4. Final Fail-Safe: If counts match but keys are missing, map by index
+        if len(normalized_list) == len(repos):
             for i in range(len(repos)):
                 idx = i + 1
-                if idx not in result and isinstance(summaries[i], dict):
-                    result[idx] = summaries[i].get("summary", "暂无解读。")
+                if idx not in result:
+                    item = normalized_list[i]
+                    result[idx] = item.get("summary") if isinstance(item, dict) else str(item)
 
+        print(f"📊 成功解析了 {len(result)}/{len(repos)} 个项目的深度解读。")
         return result
+
     except Exception as e:
         print(f"⚠️ DeepSeek 调用或解析失败: {e}")
         import traceback

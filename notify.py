@@ -27,11 +27,16 @@ def _post_to_dingtalk(payload):
 def format_stars(n):
     return f"{n/1000:.1f}k" if n >= 1000 else str(n)
 
+import time
+
 def send_dingtalk_image(image_url, today):
     """消息①：图片报告（嵌入 GitHub Raw URL）。"""
-    print(f"📨 推送图片消息: {image_url}")
+    # 添加时间戳以绕过 GitHub CDN 缓存
+    cache_buster = int(time.time())
+    final_url = f"{image_url}?t={cache_buster}"
+    print(f"📨 推送图片消息: {final_url}")
     title = f"GitHub 近7天 Star 增速 TOP 10 · {today}"
-    text = f"### 📊 {title}\n\n![GitHub Trending]({image_url})"
+    text = f"### 📊 {title}\n\n![GitHub Trending]({final_url})"
     _post_to_dingtalk({"msgtype": "markdown", "markdown": {"title": title, "text": text}})
 
 def send_dingtalk_links(repos, today):
