@@ -8,8 +8,8 @@ import re
 import html as html_module
 from playwright.sync_api import sync_playwright
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK")
+DEEPSEEK_API_KEY = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+DINGTALK_WEBHOOK = (os.getenv("DINGTALK_WEBHOOK") or "").strip()
 
 _CSS = """
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -114,7 +114,7 @@ def fetch_github_trending():
         f"?q=created:>{week_ago}&sort=stars&order=desc&per_page=10"
     )
     headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "GitHub-Trending-Bot/1.0"}
-    gh_token = os.getenv("GH_TOKEN")
+    gh_token = (os.getenv("GH_TOKEN") or "").strip()
     if gh_token:
         headers["Authorization"] = f"token {gh_token}"
     try:
@@ -249,7 +249,10 @@ def generate_summary(repos):
         return result
 
     except Exception as e:
-        print(f"⚠️ DeepSeek 调用或解析失败: {e}")
+        if "Invalid header value" in str(e):
+            print(f"❌ DeepSeek 调用失败: 检测到非法的 API Key 格式 (可能包含空格或换行符)，请检查 GitHub Secrets 配置。")
+        else:
+            print(f"⚠️ DeepSeek 调用或解析失败: {e}")
         import traceback
         traceback.print_exc()
         return {}

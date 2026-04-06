@@ -2,7 +2,7 @@ import os
 import json
 import requests
 
-DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK")
+DINGTALK_WEBHOOK = (os.getenv("DINGTALK_WEBHOOK") or "").strip()
 
 def _post_to_dingtalk(payload):
     """通用钉钉 Webhook 发送。"""
