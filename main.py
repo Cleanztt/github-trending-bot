@@ -225,10 +225,7 @@ def generate_html(repos, summaries, today):
         </div>
         <div class="daily-badge">DAILY</div>
     </div>
-    <div class="col-header">
-        <div class="ch-rank">增速</div>
-        <div class="ch-project">项目 &amp; AI 解读</div>
-    </div>
+
     {rows_html}
     <div class="footer">💡 Antigravity + DeepSeek · 每日 09:00 自动推送</div>
 </div></body></html>"""
@@ -248,15 +245,8 @@ def render_image(html_content):
 
 
 
-def send_dingtalk_markdown_image(image_url, today):
-    """通过 Markdown 消息嵌入 GitHub Raw 图片 URL 推送钉钉（无大小限制）。"""
-    print(f"📨 正在推送至钉钉: {image_url}")
-    title = f"GitHub 近7天 Star 增速 TOP 10 · {today}"
-    text = f"### 📊 {title}\n\n![GitHub Trending]({image_url})"
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {"title": title, "text": text},
-    }
+def _post_to_dingtalk(payload):
+    """通用钉钉 Webhook 发送。"""
     try:
         resp = requests.post(
             DINGTALK_WEBHOOK,
@@ -266,11 +256,31 @@ def send_dingtalk_markdown_image(image_url, today):
         )
         result = resp.json()
         if result.get("errcode") == 0:
-            print("✅ 钉钉推送成功！")
+            print("✅ 推送成功！")
         else:
-            print(f"❌ 钉钉推送失败: {result}")
+            print(f"❌ 推送失败: {result}")
     except Exception as e:
         print(f"❌ 调用钉钉接口异常: {e}")
+
+
+def send_dingtalk_image(image_url, today):
+    """消息①：图片报告（嵌入 GitHub Raw URL）。"""
+    print(f"📨 推送图片消息...")
+    title = f"GitHub 近7天 Star 增速 TOP 10 · {today}"
+    text = f"### 📊 {title}\n\n![GitHub Trending]({image_url})"
+    _post_to_dingtalk({"msgtype": "markdown", "markdown": {"title": title, "text": text}})
+
+
+def send_dingtalk_links(repos, today):
+    """消息②：紧跟图片的纯链接列表，方便一键直达仓库。"""
+    print("📨 推送链接列表消息...")
+    title = f"🔗 GitHub TOP 10 · {today} · 点击直达仓库"
+    lines = [f"**{title}**\n"]
+    for i, repo in enumerate(repos, 1):
+        short = repo['name'].split('/')[-1]
+        lines.append(f"{i}. [{repo['name']}]({repo['url']}) ⭐ {format_stars(repo['stars'])}")
+    text = "\n".join(lines)
+    _post_to_dingtalk({"msgtype": "markdown", "markdown": {"title": title, "text": text}})
 
 
 if __name__ == "__main__":
@@ -302,7 +312,8 @@ if __name__ == "__main__":
         image_url = (
             f"https://raw.githubusercontent.com/{github_repo}/{github_ref}/{image_filename}"
         )
-        send_dingtalk_markdown_image(image_url, today)
+        send_dingtalk_image(image_url, today)   # 消息①：图片报告
+        send_dingtalk_links(repos, today)        # 消息②：可点击链接列表
     else:
         print(f"ℹ️  本地模式：图片已保存为 {image_filename}，请用图片查看器预览。")
         print("    推送到 GitHub 后，Actions 将自动完成钉钉推送。")
