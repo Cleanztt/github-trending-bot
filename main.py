@@ -4,8 +4,8 @@ import json
 import datetime
 import hashlib
 import base64
+import re
 import html as html_module
-from openai import OpenAI
 from playwright.sync_api import sync_playwright
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
@@ -175,11 +175,13 @@ def generate_summary(repos):
         response.raise_for_status()
         
         raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        summaries = json.loads(raw.strip())
+        
+        # 提取真正的 JSON 内容（无论是数组还是对象）
+        json_match = re.search(r'(\[.*\]|\{.*\})', raw, re.DOTALL)
+        if json_match:
+            raw = json_match.group(1)
+            
+        summaries = json.loads(raw)
         
         # 处理返回是字典 {"projects": [...]} 或者是列表 [...] 的情况
         if isinstance(summaries, dict):
@@ -188,9 +190,23 @@ def generate_summary(repos):
                     summaries = v
                     break
 
-        return {item["rank"]: item["summary"] for item in summaries}
+        # 尝试构建结果，允许 rank 不存在，可以通过 name 匹配
+        result = {}
+        for item in summaries:
+            summary_text = item.get("summary") or item.get("description", "暂无解读。")
+            if "rank" in item:
+                result[item["rank"]] = summary_text
+            else:
+                # 如果没有 rank，试图去 repos 里找对应的 rank
+                for i, r in enumerate(repos, 1):
+                    if item.get("name", "").lower() in r["name"].lower():
+                        result[i] = summary_text
+
+        return result
     except Exception as e:
         print(f"⚠️ DeepSeek 调用或解析失败: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 
