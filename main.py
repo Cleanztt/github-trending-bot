@@ -165,8 +165,7 @@ def generate_summary(repos):
                 {"role": "system", "content": "你是一名资深技术专家，擅长用通俗中文解读开源项目价值。"},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.4,
-            "response_format": {"type": "json_object"}
+            "temperature": 0.4
         }
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
