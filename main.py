@@ -139,7 +139,6 @@ def fetch_github_trending():
 
 def generate_summary(repos):
     print("🧠 正在调用 DeepSeek AI 生成项目解读...")
-    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
     repo_list_text = ""
     for i, repo in enumerate(repos, 1):
         repo_list_text += (
@@ -160,20 +159,36 @@ def generate_summary(repos):
   ...
 ]"""
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
                 {"role": "system", "content": "你是一名资深技术专家，擅长用通俗中文解读开源项目价值。"},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.4,
-        )
-        raw = response.choices[0].message.content.strip()
+            "temperature": 0.4,
+            "response_format": {"type": "json_object"}
+        }
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        response = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=120)
+        response.raise_for_status()
+        
+        raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         if "```" in raw:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
         summaries = json.loads(raw.strip())
+        
+        # 处理返回是字典 {"projects": [...]} 或者是列表 [...] 的情况
+        if isinstance(summaries, dict):
+            for k, v in summaries.items():
+                if isinstance(v, list):
+                    summaries = v
+                    break
+
         return {item["rank"]: item["summary"] for item in summaries}
     except Exception as e:
         print(f"⚠️ DeepSeek 调用或解析失败: {e}")
