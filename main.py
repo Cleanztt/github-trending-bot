@@ -147,26 +147,34 @@ def generate_summary(repos):
             f"   编程语言: {repo['language']}\n"
             f"   GitHub Stars: {repo['stars']:,}\n\n"
         )
+    
     prompt = f"""你是一位资深技术专家，请对以下10个近期在 GitHub 上 Star 数激增的新兴项目进行解读。
 
 {repo_list_text}
 要求：
 1. 用中文，每个项目写3到5句话，涵盖：是什么工具、解决什么问题、适合谁用、有何亮点。
 2. 语言通俗易懂，非技术人员也能快速理解。
-3. 严格按 JSON 格式返回，不要有任何额外文字：
+3. 必须返回纯 JSON 数据，且为一个数组格式。不要有任何额外的文字如 markdown 代码块。格式示例：
 [
   {{"rank": 1, "name": "仓库全名", "summary": "3-5句话解读..."}},
   ...
 ]"""
+
     try:
         payload = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "你是一名资深技术专家，擅长用通俗中文解读开源项目价值。"},
+                {"role": "system", "content": "你是一名资深技术专家，必须只返回 JSON 格式结果，不包含任何 Markdown。"},
                 {"role": "user", "content": prompt},
             ],
+            "response_format": {"type": "json_object"},
             "temperature": 0.4
         }
+        
+        # Deepseek chat requires {"type": "json_object"} output to be a JSON object, so we modify the prompt to output an object if we use json_object.
+        # But to be perfectly safe, let's keep it as an array and forgo `json_object` format, instead just removing it from payload.
+        del payload["response_format"]
+        
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
             "Content-Type": "application/json"
@@ -176,31 +184,58 @@ def generate_summary(repos):
         
         raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         
-        # 提取真正的 JSON 内容（无论是数组还是对象）
+        # 清除 markdown 外壳
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw = "\n".join(lines).strip()
+            
+        # 尝试查找包含 json 的括号结构
         json_match = re.search(r'(\[.*\]|\{.*\})', raw, re.DOTALL)
         if json_match:
             raw = json_match.group(1)
             
         summaries = json.loads(raw)
         
-        # 处理返回是字典 {"projects": [...]} 或者是列表 [...] 的情况
+        # 处理返回是字典的情况，例如 {"projects": [...]}，或者 {...} 
         if isinstance(summaries, dict):
+            # 找到内部包含列表的值
             for k, v in summaries.items():
                 if isinstance(v, list):
                     summaries = v
                     break
+            else:
+                # 如果找不到列表，可能是一个包含 rank key 的字典： { "1": {"name":...}, ... }
+                summaries = list(summaries.values())
 
-        # 尝试构建结果，允许 rank 不存在，可以通过 name 匹配
+        # 尝试构建结果
         result = {}
         for item in summaries:
+            if not isinstance(item, dict):
+                continue
             summary_text = item.get("summary") or item.get("description", "暂无解读。")
             if "rank" in item:
-                result[item["rank"]] = summary_text
+                try:
+                    result[int(item["rank"])] = summary_text
+                except (ValueError, TypeError):
+                    pass
             else:
-                # 如果没有 rank，试图去 repos 里找对应的 rank
+                # 通过纯 name 模糊匹配
                 for i, r in enumerate(repos, 1):
-                    if item.get("name", "").lower() in r["name"].lower():
+                    item_name = item.get("name", "").lower()
+                    repo_name = r["name"].lower()
+                    if item_name and (item_name in repo_name or repo_name in item_name):
                         result[i] = summary_text
+
+        # 如果部分没匹配上，基于位置顺序保底匹配（如果数量刚好）
+        if len(result) < len(repos) and len(summaries) == len(repos):
+            for i in range(len(repos)):
+                idx = i + 1
+                if idx not in result and isinstance(summaries[i], dict):
+                    result[idx] = summaries[i].get("summary", "暂无解读。")
 
         return result
     except Exception as e:
