@@ -33,12 +33,10 @@ jobs:
       - name: Install Playwright Chromium
         run: playwright install chromium --with-deps
 
-      - name: Generate report image & send to DingTalk
+      - name: Generate report image (save to file only)
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
+          # 不传 DINGTALK_WEBHOOK，让脚本进入本地模式只生成图片
         run: python main.py
 
       - name: Commit & push generated image to repo
@@ -48,3 +46,11 @@ jobs:
           git add report-*.png
           git diff --cached --quiet || git commit -m "📊 Auto: add daily report image $(date +%Y-%m-%d)"
           git push
+
+      - name: Send DingTalk notification (image URL now live)
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: python notify.py
