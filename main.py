@@ -114,6 +114,9 @@ def fetch_github_trending():
         f"?q=created:>{week_ago}&sort=stars&order=desc&per_page=10"
     )
     headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "GitHub-Trending-Bot/1.0"}
+    gh_token = os.getenv("GH_TOKEN")
+    if gh_token:
+        headers["Authorization"] = f"token {gh_token}"
     try:
         response = requests.get(api_url, headers=headers, timeout=15)
         response.raise_for_status()

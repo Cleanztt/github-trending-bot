@@ -36,6 +36,7 @@ jobs:
       - name: Generate report image (save to file only)
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 不传 DINGTALK_WEBHOOK，让脚本进入本地模式只生成图片
         run: python main.py
 
