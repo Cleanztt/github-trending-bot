@@ -1,0 +1,308 @@
+import os
+import requests
+import json
+import datetime
+import hashlib
+import base64
+import html as html_module
+from openai import OpenAI
+from playwright.sync_api import sync_playwright
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK")
+
+_CSS = """
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans',
+                 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei',
+                 'Helvetica Neue', Arial, sans-serif;
+    background: #0a0e1a;
+    color: #c9d1d9;
+    width: 900px;
+}
+.container { width: 900px; }
+.header {
+    background: linear-gradient(135deg, #1a3a6e 0%, #1e1060 60%, #0a1628 100%);
+    padding: 36px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid #1f6feb;
+    position: relative;
+    overflow: hidden;
+}
+.header-glow {
+    position: absolute; top: -80px; right: -80px;
+    width: 320px; height: 320px;
+    background: radial-gradient(circle, rgba(88,166,255,0.15) 0%, transparent 70%);
+    pointer-events: none;
+}
+.header-left { display: flex; align-items: center; gap: 18px; position: relative; z-index: 1; }
+.header-icon { font-size: 44px; line-height: 1; }
+.main-title { font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1.35; }
+.sub-title { font-size: 13px; color: #8b949e; margin-top: 6px; }
+.daily-badge {
+    background: linear-gradient(135deg, #238636, #2ea043);
+    color: white; font-size: 10px; font-weight: 700;
+    letter-spacing: 2.5px; padding: 8px 16px;
+    border-radius: 20px; position: relative; z-index: 1;
+}
+.col-header {
+    display: flex; align-items: center;
+    padding: 10px 24px 10px 20px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    font-size: 11px; font-weight: 600;
+    color: #6e7681; letter-spacing: 1.2px; text-transform: uppercase;
+}
+.ch-rank { width: 70px; text-align: center; }
+.ch-project { flex: 1; }
+.project-row {
+    display: flex; align-items: flex-start;
+    padding: 22px 24px 22px 20px;
+    border-bottom: 1px solid #21262d;
+    gap: 18px;
+}
+.project-row:nth-child(odd) { background: #0d1117; }
+.project-row:nth-child(even) { background: #0a0e18; }
+.project-row:last-child { border-bottom: none; }
+.rank-badge {
+    width: 42px; height: 42px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 800;
+    flex-shrink: 0; margin-top: 2px;
+}
+.rank-1 { background: linear-gradient(135deg, #f6a821, #f0c040); color: #3d1f00; box-shadow: 0 0 14px rgba(240,192,64,0.5); }
+.rank-2 { background: linear-gradient(135deg, #909599, #c8cdd2); color: #111; box-shadow: 0 0 10px rgba(200,205,210,0.3); }
+.rank-3 { background: linear-gradient(135deg, #a0522d, #cd8b4a); color: #2a0a00; box-shadow: 0 0 10px rgba(205,139,74,0.35); }
+.rank-other { background: #161b22; border: 1px solid #30363d; color: #58a6ff; }
+.project-content { flex: 1; min-width: 0; }
+.project-title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.project-path { font-size: 13px; color: #8b949e; }
+.slash { color: #484f58; margin: 0 1px; }
+.project-name { font-size: 17px; font-weight: 700; color: #58a6ff; letter-spacing: -0.3px; }
+.stars-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(210,153,34,0.12);
+    border: 1px solid rgba(210,153,34,0.35);
+    border-radius: 20px; padding: 2px 10px;
+    font-size: 13px; font-weight: 600; color: #e3b341;
+}
+.lang-chip {
+    display: inline-flex; align-items: center;
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 20px; padding: 2px 10px;
+    font-size: 12px; color: #58a6ff;
+}
+.summary { font-size: 13.5px; line-height: 1.75; color: #8b949e; }
+.footer {
+    padding: 18px 40px; text-align: center;
+    font-size: 12px; color: #3d444d;
+    background: #080b14; border-top: 1px solid #21262d;
+    letter-spacing: 0.5px;
+}
+"""
+
+
+def fetch_github_trending():
+    print("📡 正在通过 GitHub Search API 获取数据...")
+    week_ago = (datetime.date.today() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+    api_url = (
+        f"https://api.github.com/search/repositories"
+        f"?q=created:>{week_ago}&sort=stars&order=desc&per_page=10"
+    )
+    headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "GitHub-Trending-Bot/1.0"}
+    try:
+        response = requests.get(api_url, headers=headers, timeout=15)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"❌ GitHub API 请求失败: {e}")
+        return []
+    repos = []
+    for item in response.json().get("items", []):
+        repos.append({
+            "name": item["full_name"],
+            "url": item["html_url"],
+            "description": item.get("description") or "No description provided.",
+            "stars": item["stargazers_count"],
+            "language": item.get("language") or "N/A",
+            "created_at": item["created_at"][:10],
+        })
+    print(f"✅ 成功获取 {len(repos)} 个项目。")
+    return repos
+
+
+def generate_summary(repos):
+    print("🧠 正在调用 DeepSeek AI 生成项目解读...")
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    repo_list_text = ""
+    for i, repo in enumerate(repos, 1):
+        repo_list_text += (
+            f"{i}. 项目名: {repo['name']}\n"
+            f"   官方简介(英文): {repo['description']}\n"
+            f"   编程语言: {repo['language']}\n"
+            f"   GitHub Stars: {repo['stars']:,}\n\n"
+        )
+    prompt = f"""你是一位资深技术专家，请对以下10个近期在 GitHub 上 Star 数激增的新兴项目进行解读。
+
+{repo_list_text}
+要求：
+1. 用中文，每个项目写3到5句话，涵盖：是什么工具、解决什么问题、适合谁用、有何亮点。
+2. 语言通俗易懂，非技术人员也能快速理解。
+3. 严格按 JSON 格式返回，不要有任何额外文字：
+[
+  {{"rank": 1, "name": "仓库全名", "summary": "3-5句话解读..."}},
+  ...
+]"""
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "你是一名资深技术专家，擅长用通俗中文解读开源项目价值。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
+        )
+        raw = response.choices[0].message.content.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        summaries = json.loads(raw.strip())
+        return {item["rank"]: item["summary"] for item in summaries}
+    except Exception as e:
+        print(f"⚠️ DeepSeek 调用或解析失败: {e}")
+        return {}
+
+
+def format_stars(n):
+    return f"{n/1000:.1f}k" if n >= 1000 else str(n)
+
+
+def generate_html(repos, summaries, today):
+    rows_html = ""
+    for i, repo in enumerate(repos, 1):
+        summary = summaries.get(i, "暂无解读。")
+        parts = repo["name"].split("/")
+        owner = html_module.escape(parts[0])
+        short_name = html_module.escape(parts[1] if len(parts) > 1 else parts[0])
+        stars = format_stars(repo["stars"])
+        lang = repo["language"]
+        rank_cls = {1: "rank-1", 2: "rank-2", 3: "rank-3"}.get(i, "rank-other")
+        lang_html = (
+            f'<span class="lang-chip">{html_module.escape(lang)}</span>'
+            if lang and lang != "N/A" else ""
+        )
+        rows_html += f"""
+        <div class="project-row">
+            <div class="rank-badge {rank_cls}">{i}</div>
+            <div class="project-content">
+                <div class="project-title-row">
+                    <span>
+                        <span class="project-path">{owner}</span>
+                        <span class="slash">/</span>
+                        <span class="project-name">{short_name}</span>
+                    </span>
+                    <span class="stars-chip">⭐ {stars}</span>
+                    {lang_html}
+                </div>
+                <div class="summary">{html_module.escape(summary)}</div>
+            </div>
+        </div>"""
+
+    return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<style>{_CSS}</style></head><body><div class="container">
+    <div class="header">
+        <div class="header-glow"></div>
+        <div class="header-left">
+            <div class="header-icon">📊</div>
+            <div>
+                <div class="main-title">GitHub 近7天 Star 增速 TOP 10</div>
+                <div class="sub-title">{today}&nbsp;&nbsp;·&nbsp;&nbsp;DeepSeek AI 深度解读&nbsp;&nbsp;·&nbsp;&nbsp;全自动生成</div>
+            </div>
+        </div>
+        <div class="daily-badge">DAILY</div>
+    </div>
+    <div class="col-header">
+        <div class="ch-rank">增速</div>
+        <div class="ch-project">项目 &amp; AI 解读</div>
+    </div>
+    {rows_html}
+    <div class="footer">💡 Antigravity + DeepSeek · 每日 09:00 自动推送</div>
+</div></body></html>"""
+
+
+def render_image(html_content):
+    print("🎨 正在渲染图片（Playwright）...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 900, "height": 600}, device_scale_factor=1.5)
+        page.set_content(html_content, wait_until="domcontentloaded")
+        page.wait_for_timeout(500)
+        image_bytes = page.screenshot(full_page=True)
+        browser.close()
+    print(f"✅ 图片渲染完成，大小: {len(image_bytes) / 1024:.0f} KB")
+    return image_bytes
+
+
+
+def send_dingtalk_markdown_image(image_url, today):
+    """通过 Markdown 消息嵌入 GitHub Raw 图片 URL 推送钉钉（无大小限制）。"""
+    print(f"📨 正在推送至钉钉: {image_url}")
+    title = f"GitHub 近7天 Star 增速 TOP 10 · {today}"
+    text = f"### 📊 {title}\n\n![GitHub Trending]({image_url})"
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {"title": title, "text": text},
+    }
+    try:
+        resp = requests.post(
+            DINGTALK_WEBHOOK,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=30,
+        )
+        result = resp.json()
+        if result.get("errcode") == 0:
+            print("✅ 钉钉推送成功！")
+        else:
+            print(f"❌ 钉钉推送失败: {result}")
+    except Exception as e:
+        print(f"❌ 调用钉钉接口异常: {e}")
+
+
+if __name__ == "__main__":
+    if not DEEPSEEK_API_KEY:
+        print("错误：未找到 DEEPSEEK_API_KEY 环境变量！")
+        exit(1)
+    if not DINGTALK_WEBHOOK:
+        print("错误：未找到 DINGTALK_WEBHOOK 环境变量！")
+        exit(1)
+
+    repos = fetch_github_trending()
+    if not repos:
+        print("未获取到项目数据，退出。")
+        exit(1)
+
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    summaries = generate_summary(repos)
+    html_content = generate_html(repos, summaries, today)
+    image_bytes = render_image(html_content)
+
+    image_filename = f"report-{today}.png"
+    with open(image_filename, "wb") as f:
+        f.write(image_bytes)
+    print(f"💾 图片已保存: {image_filename}")
+
+    github_repo = os.getenv("GITHUB_REPOSITORY", "")
+    github_ref = os.getenv("GITHUB_REF_NAME", "main")
+    if github_repo:
+        image_url = (
+            f"https://raw.githubusercontent.com/{github_repo}/{github_ref}/{image_filename}"
+        )
+        send_dingtalk_markdown_image(image_url, today)
+    else:
+        print(f"ℹ️  本地模式：图片已保存为 {image_filename}，请用图片查看器预览。")
+        print("    推送到 GitHub 后，Actions 将自动完成钉钉推送。")
